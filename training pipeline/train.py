@@ -4,14 +4,15 @@ import pathlib
 import dagshub
 import pandas as pd
 import xgboost as xgb
+import mlflow.sklearn
+from mlflow import MlflowClient
 from hyperopt.pyll import scope
 from sklearn.metrics import root_mean_squared_error
 from sklearn.feature_extraction import DictVectorizer
 from hyperopt import fmin, tpe, hp, STATUS_OK, Trials
 from prefect import flow, task
 
-
-@task(name= "Read Data", retries=4, retry_delay_seconds=[1, 4, 8, 16])
+@task(name="Read Data", retries=4, retry_delay_seconds=[1, 4, 8, 16])
 def read_data(file_path: str) -> pd.DataFrame:
     """Read data into DataFrame"""
     df = pd.read_parquet(file_path)
@@ -29,7 +30,7 @@ def read_data(file_path: str) -> pd.DataFrame:
 
     return df
 
-@task(name= "Add features")
+@task(name="Add features")
 def add_features(df_train: pd.DataFrame, df_val: pd.DataFrame):
     """Add features to the model"""
     df_train["PU_DO"] = df_train["PULocationID"] + "_" + df_train["DOLocationID"]
@@ -50,7 +51,7 @@ def add_features(df_train: pd.DataFrame, df_val: pd.DataFrame):
     y_val = df_val["duration"].values
     return X_train, X_val, y_train, y_val, dv
 
-@task(name="Hyper-parameter Tunning")
+@task(name="Hyperparameter tuning")
 def hyper_parameter_tunning(X_train, X_val, y_train, y_val, dv):
     mlflow.xgboost.autolog()
 
@@ -113,11 +114,11 @@ def hyper_parameter_tunning(X_train, X_val, y_train, y_val, dv):
 
     return best_params
 
-@task(name="Train Best Model")
+@task(name = "Train Best Model")
 def train_best_model(X_train, X_val, y_train, y_val, dv, best_params) -> None:
     """train a model with best hyperparams and write everything out"""
 
-    with mlflow.start_run("Best model ever"):
+    with mlflow.start_run(run_name="Best model ever"):
         train = xgb.DMatrix(X_train, label=y_train)
         valid = xgb.DMatrix(X_val, label=y_val)
 
@@ -144,6 +145,29 @@ def train_best_model(X_train, X_val, y_train, y_val, dv, best_params) -> None:
 
     return None
 
+@task(name = 'Register Model')
+def register_model():
+    MLFLOW_TRACKING_URI = mlflow.get_tracking_uri()
+    client = MlflowClient(tracking_uri=MLFLOW_TRACKING_URI)
+
+    df = mlflow.search_runs(order_by=['metrics.rmse'])
+    run_id = df.loc[df['metrics.rmse'].idxmin()]['run_id']
+    run_uri = f"runs:/{run_id}/model"
+
+    result = mlflow.register_model(
+        model_uri=run_uri,
+        name="nyc-taxi-model-perfect"
+    )
+    model_name = "nyc-taxi-model-perfect"
+    model_version_alias = "champion"
+
+    # create "champion" alias for version 1 of model "nyc-taxi-model"
+    client.set_registered_model_alias(
+        name=model_name,
+        alias=model_version_alias,
+        version= '1'
+    )
+
 @flow(name="Main Flow")
 def main_flow(year: str, month_train: str, month_val: str) -> None:
     """The main training pipeline"""
@@ -160,14 +184,19 @@ def main_flow(year: str, month_train: str, month_val: str) -> None:
     mlflow.set_experiment(experiment_name="nyc-taxi-experiment-prefect")
 
     # Load
-    df_train = read_data(train_path)
-    df_val = read_data(val_path)
+    #df_train = read_data(train_path)
+    #df_val = read_data(val_path)
 
     # Transform
-    X_train, X_val, y_train, y_val, dv = add_features(df_train, df_val)
+    #X_train, X_val, y_train, y_val, dv = add_features(df_train, df_val)
 
     # Hyper-parameter Tunning
-    best_params = hyper_parameter_tunning(X_train, X_val, y_train, y_val, dv)
+    #best_params = hyper_parameter_tunning(X_train, X_val, y_train, y_val, dv)
 
     # Train
-    train_best_model(X_train, X_val, y_train, y_val, dv, best_params)
+    #train_best_model(X_train, X_val, y_train, y_val, dv, best_params)
+
+    # Register model
+    register_model()
+
+main_flow(year="2024", month_train="01", month_val="02")
