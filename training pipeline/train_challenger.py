@@ -82,7 +82,6 @@ def register_model(run_id, model_name, alias):
     client.set_registered_model_alias(model_name, alias, model_version.version)
     return model_version.version
 
-
 @flow(name="Model Comparison challenger")
 def model_comparison_flow(year: str, month_train: str, month_val: str) -> None:
     """Flow that trains two models and assigns @champion and @challenger aliases"""
